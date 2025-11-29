@@ -1,6 +1,7 @@
 from collections import Counter
 import re
-from typing import List
+from typing import List, Tuple
+from torch.utils.data import Dataset
 
 
 class Vocabulary:
@@ -34,6 +35,49 @@ class Vocabulary:
     def get_word(self , idx:int )->str:
             return self.idx2word.get(idx,'<UNK>')
 
+
+class Word2VecDataset(Dataset):
+    def __init__(self, sentences: List[List[str]], vocab: Vocabulary,
+                 window_size: int = 2, mode: str = 'skipgram'):
+        self.vocab = vocab
+        self.window_size = window_size
+        self.mode = mode
+        self.pairs = self._generate_pairs(sentences)
+        
+    def _generate_pairs(self, sentences: List[List[str]]) -> List[Tuple]:
+        pairs = []
+
+        for sentence in sentences:
+            indices = [self.vocab.get_idx(word) for word in sentence]
+            
+            # Context pairs
+            for center_idx in range(len(indices)):
+                center_word = indices[center_idx]
+
+                # Context window
+                start = max(0, center_idx - self.window_size)
+                end = min(len(indices), center_idx + self.window_size + 1)
+                
+                context_words = []
+                for ctx_idx in range(start, end):
+                    if ctx_idx != center_idx:
+                        context_words.append(indices[ctx_idx])
+                
+                if self.mode == 'skipgram':
+                    # (center, context) pairs
+                    for context_word in context_words:
+                        pairs.append((center_word, context_word))
+                else:
+                    # (context, center) pairs
+                    if context_words:
+                        pairs.append((context_words, center_word))
+        return pairs
+    
+    def __len__(self):
+        return len(self.pairs)
+    
+    def __getitem__(self, idx):
+        return self.pairs[idx]
 
 
 
