@@ -82,6 +82,50 @@ class Word2VecDataset(Dataset):
         return self.pairs[idx]
 
 
+class SkipGram(nn.Module):
+    #Skip-gram model: predicts context words from center word
+    
+    def __init__(self, vocab_size: int, embedding_dim: int):
+        super(SkipGram, self).__init__()
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        
+        # Input embeddings (center words)
+        self.in_embeddings = nn.Embedding(vocab_size, embedding_dim)
+        # Output embeddings (context words)
+        self.out_embeddings = nn.Embedding(vocab_size, embedding_dim)
+        
+        self._init_weights()
+        
+    def _init_weights(self):
+        init_range = 0.5 / self.embedding_dim
+        self.in_embeddings.weight.data.uniform_(-init_range, init_range)
+        self.out_embeddings.weight.data.uniform_(-init_range, init_range)
+    
+    def forward(self, center_words, context_words, negative_samples):
+        batch_size = center_words.size(0)
+        
+        # Get embeddings
+        center_embeds = self.in_embeddings(center_words)  # [batch_size, embed_dim]
+        context_embeds = self.out_embeddings(context_words)  # [batch_size, embed_dim]
+        neg_embeds = self.out_embeddings(negative_samples)  # [batch_size, num_neg, embed_dim]
+        
+        # Positive score
+        pos_score = torch.sum(center_embeds * context_embeds, dim=1)  # [batch_size]
+        pos_loss = -torch.log(torch.sigmoid(pos_score))
+        
+        # Negative scores
+        neg_score = torch.bmm(neg_embeds, center_embeds.unsqueeze(2)).squeeze(2)  # [batch_size, num_neg]
+        neg_loss = -torch.sum(torch.log(torch.sigmoid(-neg_score)), dim=1)  # [batch_size]
+        
+        # Total loss
+        loss = torch.mean(pos_loss + neg_loss)
+        return loss
+    
+    def get_embeddings(self):
+        return self.in_embeddings.weight.data.cpu().numpy()
+
+
 class CBOW(nn.Module):
     #CBOW model: predicts center word from context words
     
@@ -171,3 +215,46 @@ def tokenize_corpus(corpus: str) -> List[List[str]]:
     return [sent for sent in tokenized if len(sent) > 0]
 
 
+def cosine_similarity(vec1, vec2):
+    return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+
+
+def find_similar_words(word, embeddings, vocab, top_k=5):
+    if word not in vocab.word2idx:
+        return f"'{word}' not in vocabulary"
+    
+    word_idx = vocab.get_idx(word)
+    word_vec = embeddings[word_idx]
+    
+    similarities = []
+    for idx in range(vocab.vocab_size):
+        if idx != word_idx and idx > 1:  #skip PAD, UNK and the word itself
+            sim = cosine_similarity(word_vec, embeddings[idx])
+            similarities.append((vocab.get_word(idx), sim))
+    
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    return similarities[:top_k]
+
+
+def word_analogy(word_a, word_b, word_c, embeddings, vocab, top_k=5):
+    if not all(w in vocab.word2idx for w in [word_a, word_b, word_c]):
+        return "one or more words not in vocabulary"
+    
+    vec_a = embeddings[vocab.get_idx(word_a)]
+    vec_b = embeddings[vocab.get_idx(word_b)]
+    vec_c = embeddings[vocab.get_idx(word_c)]
+    
+    # target_vec= B-A+C
+    target_vec = vec_b - vec_a + vec_c
+    
+    similarities = []
+    exclude = {word_a, word_b, word_c}
+    
+    for idx in range(vocab.vocab_size):
+        word = vocab.get_word(idx)
+        if word not in exclude and idx > 1:
+            sim = cosine_similarity(target_vec, embeddings[idx])
+            similarities.append((word, sim))
+    
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    return similarities[:top_k]
